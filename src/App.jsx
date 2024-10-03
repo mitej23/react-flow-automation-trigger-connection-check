@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import './App.css';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -92,16 +93,17 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
 };
 
 function Editor() {
-  const { fitView } = useReactFlow();
+  const { fitView, } = useReactFlow();
+  const [rfInstance, setRfInstance] = useState(null);
   const layoutApplied = useRef(false);
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const isNodesDeleted = useRef(false);
   const isEdgesDeleted = useRef(false);
   const { x, y, zoom } = useViewport(); // Get current viewport
-  const [dragStartPosition, setDragStartPosition] = useState({ x: 0, y: 0 }); // Store drag start position
+  // const [dragStartPosition, setDragStartPosition] = useState({ x: 0, y: 0 }); // Store drag start position
 
-  const isConnectedToStart = (nodeId, visited = new Set(), pEdges) => {
+  const isConnectedToStart = useCallback((nodeId, visited = new Set(), pEdges) => {
     if (nodeId === 'start') return true;
     if (visited.has(nodeId)) return false;
     visited.add(nodeId);
@@ -110,10 +112,10 @@ function Editor() {
     return incomingEdges.some((edge) =>
       isConnectedToStart(edge.source, visited, pEdges)
     );
-  };
+  }, []);
 
   const updateAllNodes = (pNodes = nodes, pEdges = edges) => {
-    return nodes.map((node) => {
+    return pNodes.map((node) => {
       // Update a single node color based on connection to start
       const updatedNode = updateNodeColor(node.id, nodes, pEdges);
       // Since `updateNodeColor` is returning an array, extract the updated node
@@ -280,14 +282,13 @@ function Editor() {
   const onDragStart = useCallback((event, type) => {
     event.dataTransfer.setData('application/reactflow', type);
     // Get the mouse position at drag start
-    setDragStartPosition({
-      x: event.clientX,
-      y: event.clientY,
-    });
+    // setDragStartPosition({
+    //   x: event.clientX,
+    //   y: event.clientY,
+    // });
   }, []);
 
   const onLayout = useCallback(() => {
-    console.log('on layout');
 
     // Check connectivity and update node colors
     const updatedNodes = nodes.map((node) => {
@@ -316,6 +317,11 @@ function Editor() {
         new Set(),
         edges
       );
+      const isTargetConnected = isConnectedToStart(
+        edge.target,
+        new Set(),
+        edges
+      );
       return {
         ...edge,
         style: {
@@ -336,7 +342,43 @@ function Editor() {
 
     // render all the layouted nodes in center
     layoutApplied.current = true;
-  }, [nodes, edges]);
+  }, [nodes, edges, setNodes, setEdges, isConnectedToStart]);
+
+  const onPublish = useCallback(() => {
+    // check for nodes that are not connected to start trigger
+
+    let isConnectedToStartCheck = true
+    let containsAtleastOneEmail = false
+
+    nodes.forEach((node) => {
+      const isConnected = isConnectedToStart(node.id, new Set(), edges);
+      if (!isConnected) {
+        isConnectedToStartCheck = false
+      }
+      if (node.type === "email") {
+        containsAtleastOneEmail = true
+      }
+    })
+
+    if (!isConnectedToStartCheck) {
+      alert("Cannot Save: Some nodes are not connected to start")
+      return
+    }
+
+    if (!containsAtleastOneEmail) {
+      alert("Cannot Save: Must have atleast one email on trigger")
+      return
+    }
+
+    // saving the instance
+    if (rfInstance) {
+      const flow = rfInstance.toObject()
+      console.log(flow)
+    }
+
+
+
+  }, [edges, isConnectedToStart, nodes, rfInstance])
 
   const handleNodesChange = useCallback(
     (changes) => {
@@ -350,7 +392,7 @@ function Editor() {
         return updatedNodes;
       });
     },
-    [nodes, edges]
+    [setNodes]
   );
 
   const handleEdgesChange = useCallback(
@@ -365,7 +407,7 @@ function Editor() {
         return edgesAfterChangesApplied;
       });
     },
-    [nodes, edges]
+    [setEdges]
   );
 
   useEffect(() => {
@@ -378,6 +420,7 @@ function Editor() {
       isEdgesDeleted.current = false;
       isNodesDeleted.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges]);
 
   // makes sure on save fitview function runs after all the nodes are placed.
@@ -394,6 +437,7 @@ function Editor() {
         <ReactFlow
           nodes={nodes}
           edges={edges}
+          onInit={setRfInstance}
           connectionLineType={ConnectionLineType.SmoothStep}
           connectionLineStyle={{ strokeWidth: 2, stroke: 'black' }}
           onBeforeDelete={onBeforeDelete}
@@ -437,7 +481,8 @@ function Editor() {
         >
           Condition Node
         </div>
-        <button onClick={() => onLayout()}>Save</button>
+        <button onClick={() => onLayout()}>Layout</button>
+        <button onClick={() => onPublish()}> Publish</button>
       </div>
     </div>
   );
