@@ -20,6 +20,7 @@ import {
 
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
+import { v4 as uuidv4 } from 'uuid';
 
 // importing components
 import { nodeTypes } from './components/Nodes';
@@ -114,23 +115,7 @@ function Editor() {
     );
   }, []);
 
-  const updateAllNodes = (pNodes = nodes, pEdges = edges) => {
-    return pNodes.map((node) => {
-      // Update a single node color based on connection to start
-      const updatedNode = updateNodeColor(node.id, nodes, pEdges);
-      // Since `updateNodeColor` is returning an array, extract the updated node
-      return updatedNode.find((n) => n.id === node.id);
-    });
-  };
-
-  const updateAllEdges = (pEdges = edges) => {
-    return pEdges.map((edge) => {
-      const updatedEdges = updateEdgeColor(edge.source, edge.target, pEdges);
-      return updatedEdges.find((e) => e.id === edge.id);
-    });
-  };
-
-  const updateNodeColor = (nodeId, pNodes, pEdges) => {
+  const updateNodeColor = useCallback((nodeId, pNodes, pEdges) => {
     console.log('update node color');
 
     return pNodes.map((node) => {
@@ -147,9 +132,18 @@ function Editor() {
       }
       return node;
     });
-  };
+  }, [isConnectedToStart]);
 
-  const updateEdgeColor = (source, target, pEdges) => {
+  const updateAllNodes = useCallback((pNodes = nodes, pEdges = edges) => {
+    return pNodes.map((node) => {
+      // Update a single node color based on connection to start
+      const updatedNode = updateNodeColor(node.id, nodes, pEdges);
+      // Since `updateNodeColor` is returning an array, extract the updated node
+      return updatedNode.find((n) => n.id === node.id);
+    });
+  }, [edges, nodes, updateNodeColor]);
+
+  const updateEdgeColor = useCallback((source, target, pEdges) => {
     return pEdges.map((edge) => {
       if (edge.source === source && edge.target === target) {
         const isSourceConnected = isConnectedToStart(
@@ -172,7 +166,14 @@ function Editor() {
       }
       return edge;
     });
-  };
+  }, [isConnectedToStart]);
+
+  const updateAllEdges = useCallback((pEdges = edges) => {
+    return pEdges.map((edge) => {
+      const updatedEdges = updateEdgeColor(edge.source, edge.target, pEdges);
+      return updatedEdges.find((e) => e.id === edge.id);
+    });
+  }, [edges, updateEdgeColor]);
 
   const onConnect = useCallback(
     (params) => {
@@ -245,7 +246,7 @@ function Editor() {
         edges: edgesToBeDeleted,
       };
     },
-    [nodes, edges]
+    []
   );
 
   const onDragOver = useCallback((event) => {
@@ -383,94 +384,84 @@ function Editor() {
 
 
     let emails = [];
-    let emailId = 1;
+    // let emailId = 1;
 
     const getNextNode = (nodeId) => {
       const outgoingEdge = edges.find(e => e.source === nodeId);
       return outgoingEdge ? nodes.find(n => n.id === outgoingEdge.target) : null;
     };
 
-    const processEmailNode = (emailNode, parentEmailId = null, accumulatedDelay = 0) => {
+    const processEmailNode = (emailNode, parentEmailId = null, accumulatedDelay = 0, branch = null) => {
+      const uniqueId = uuidv4();
       const email = {
-        id: emailId++,
-        subject: emailNode.data.subject || `Email ${emailId}`,
-        content: emailNode.data.content || `Content for email ${emailId}...`,
+        id: uniqueId,
+        subject: `Email ${uniqueId}`,
+        content: emailNode.data.content || `Content for email ${uniqueId}...`,
         delay_hours: accumulatedDelay,
+        parent_email_id: parentEmailId
       };
 
+      if (branch) {
+        email.branch = branch;
+      }
 
-      email.parent_email_id = parentEmailId || null;
-
-
-      console.log("processing the email node")
-      console.log("pushing the email to list")
-      console.log(email)
-      emails.push(email)
-
-
+      emails.push(email);
 
       const nextNode = getNextNode(emailNode.id);
-      console.log("next node after email")
-      console.log(nextNode)
       if (nextNode) {
         if (nextNode.type === 'delay') {
           const delayHours = parseInt(nextNode.data.delay) || 24;
-          return processNode(getNextNode(nextNode.id), email.id, accumulatedDelay + delayHours);
+          email.next_email_id = processNode(getNextNode(nextNode.id), email.id, accumulatedDelay + delayHours, branch);
+        } else if (nextNode.type === 'condition') {
+          email.condition = processConditionNode(nextNode, email.id, accumulatedDelay);
+          // Remove next_email_id for emails with conditions
+          delete email.next_email_id;
+        } else {
+          email.next_email_id = processNode(nextNode, email.id, accumulatedDelay, branch);
         }
-        // else if (nextNode.type === 'condition') {
-        //   email.condition = processConditionNode(nextNode, email.id, accumulatedDelay);
-        // } else {
-        //   email.next_email_id = processNode(nextNode, email.id, accumulatedDelay).id;
-        // }
       }
 
-      return email;
+      return email.id;
     };
 
     const processConditionNode = (conditionNode, parentEmailId, accumulatedDelay) => {
-      console.log("processing condition node")
-      console.log(conditionNode)
       const trueEdge = edges.find(e => e.source === conditionNode.id && e.sourceHandle === 'yes');
       const falseEdge = edges.find(e => e.source === conditionNode.id && e.sourceHandle === 'no');
 
-      console.log("processing true edges and false edges")
-      console.log(trueEdge, falseEdge)
-
-      const processBranch = (edge) => {
+      const processBranch = (edge, branchType) => {
         if (!edge) return null;
         const nextNode = nodes.find(n => n.id === edge.target);
         if (nextNode) {
-          const processedNode = processNode(nextNode, parentEmailId, accumulatedDelay);
-          return processedNode.id
+          return processNode(nextNode, parentEmailId, accumulatedDelay, branchType);
         }
         return null;
       };
 
       return {
         type: conditionNode.data.conditionType || "opened",
-        true_branch: { email_id: processBranch(trueEdge) },
-        false_branch: { email_id: processBranch(falseEdge) }
+        true_branch: { email_id: processBranch(trueEdge, 'true') },
+        false_branch: { email_id: processBranch(falseEdge, 'false') }
       };
     };
 
-    const processNode = (node, parentEmailId = null, accumulatedDelay = 0) => {
+    const processNode = (node, parentEmailId = null, accumulatedDelay = 0, branch = null) => {
       if (!node) return null;
-
-      console.log("processing node")
-      console.log(node)
 
       switch (node.type) {
         case 'email':
-          return processEmailNode(node, parentEmailId, accumulatedDelay);
+          return processEmailNode(node, parentEmailId, accumulatedDelay, branch);
         case 'delay':
           {
             const delayHours = parseInt(node.data.delay) || 24;
-            return processNode(getNextNode(node.id), parentEmailId, accumulatedDelay + delayHours);
+            return processNode(getNextNode(node.id), parentEmailId, accumulatedDelay + delayHours, branch);
           }
         case 'condition':
-          return emails[emails.length - 1] = {
-            ...emails[emails.length - 1],
-            condition: processConditionNode(node, emailId, accumulatedDelay)
+          {
+            const lastEmail = emails[emails.length - 1];
+            lastEmail.condition = processConditionNode(node, lastEmail.id, accumulatedDelay);
+            // Remove next_email_id for emails with conditions
+            delete lastEmail.next_email_id;
+            return lastEmail.id;
           }
         default:
           console.warn(`Unexpected node type: ${node.type}`);
@@ -486,8 +477,6 @@ function Editor() {
     } else {
       console.warn('No node connected to the start node');
     }
-
-    console.log(emails)
 
     const output = { emails };
     console.log(JSON.stringify(output, null, 2));
