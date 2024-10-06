@@ -184,9 +184,9 @@ function Editor() {
         (sourceNode.type === 'start' &&
           ['delay', 'email'].includes(targetNode.type)) ||
         (sourceNode.type === 'delay' &&
-          ['email', 'condition'].includes(targetNode.type)) ||
+          ['email', 'condition', 'delay'].includes(targetNode.type)) ||
         (sourceNode.type === 'email' && ['delay'].includes(targetNode.type)) ||
-        (sourceNode.type === 'condition' && targetNode.type === 'email')
+        (sourceNode.type === 'condition' && ['delay', 'email'].includes(targetNode.type))
       ) {
         let tempEdges = addEdge(
           {
@@ -230,7 +230,7 @@ function Editor() {
         }
       }
     },
-    [nodes, setEdges, updateEdgeColor, updateNodeColor, edges, setNodes]
+    [nodes, edges, updateAllNodes, updateAllEdges, setEdges, setNodes]
   );
 
   const onBeforeDelete = useCallback(
@@ -344,7 +344,7 @@ function Editor() {
     layoutApplied.current = true;
   }, [nodes, edges, setNodes, setEdges, isConnectedToStart]);
 
-  const onPublish = useCallback(() => {
+  const onPublish = () => {
     // check for nodes that are not connected to start trigger
 
     let isConnectedToStartCheck = true
@@ -373,12 +373,126 @@ function Editor() {
     // saving the instance
     if (rfInstance) {
       const flow = rfInstance.toObject()
-      console.log(flow)
+      // console.log(flow)
     }
 
+    console.log(nodes, edges)
+
+    // Generate the JSON output
+    // Current issue is that is push the node inside the array even if it is nested. 
 
 
-  }, [edges, isConnectedToStart, nodes, rfInstance])
+    let emails = [];
+    let emailId = 1;
+
+    const getNextNode = (nodeId) => {
+      const outgoingEdge = edges.find(e => e.source === nodeId);
+      return outgoingEdge ? nodes.find(n => n.id === outgoingEdge.target) : null;
+    };
+
+    const processEmailNode = (emailNode, parentEmailId = null, accumulatedDelay = 0) => {
+      const email = {
+        id: emailId++,
+        subject: emailNode.data.subject || `Email ${emailId}`,
+        content: emailNode.data.content || `Content for email ${emailId}...`,
+        delay_hours: accumulatedDelay,
+      };
+
+
+      email.parent_email_id = parentEmailId || null;
+
+
+      console.log("processing the email node")
+      console.log("pushing the email to list")
+      console.log(email)
+      emails.push(email)
+
+
+
+      const nextNode = getNextNode(emailNode.id);
+      console.log("next node after email")
+      console.log(nextNode)
+      if (nextNode) {
+        if (nextNode.type === 'delay') {
+          const delayHours = parseInt(nextNode.data.delay) || 24;
+          return processNode(getNextNode(nextNode.id), email.id, accumulatedDelay + delayHours);
+        }
+        // else if (nextNode.type === 'condition') {
+        //   email.condition = processConditionNode(nextNode, email.id, accumulatedDelay);
+        // } else {
+        //   email.next_email_id = processNode(nextNode, email.id, accumulatedDelay).id;
+        // }
+      }
+
+      return email;
+    };
+
+    const processConditionNode = (conditionNode, parentEmailId, accumulatedDelay) => {
+      console.log("processing condition node")
+      console.log(conditionNode)
+      const trueEdge = edges.find(e => e.source === conditionNode.id && e.sourceHandle === 'yes');
+      const falseEdge = edges.find(e => e.source === conditionNode.id && e.sourceHandle === 'no');
+
+      console.log("processing true edges and false edges")
+      console.log(trueEdge, falseEdge)
+
+      const processBranch = (edge) => {
+        if (!edge) return null;
+        const nextNode = nodes.find(n => n.id === edge.target);
+        if (nextNode) {
+          const processedNode = processNode(nextNode, parentEmailId, accumulatedDelay);
+          return processedNode.id
+        }
+        return null;
+      };
+
+      return {
+        type: conditionNode.data.conditionType || "opened",
+        true_branch: { email_id: processBranch(trueEdge) },
+        false_branch: { email_id: processBranch(falseEdge) }
+      };
+    };
+
+    const processNode = (node, parentEmailId = null, accumulatedDelay = 0) => {
+      if (!node) return null;
+
+      console.log("processing node")
+      console.log(node)
+
+      switch (node.type) {
+        case 'email':
+          return processEmailNode(node, parentEmailId, accumulatedDelay);
+        case 'delay':
+          {
+            const delayHours = parseInt(node.data.delay) || 24;
+            return processNode(getNextNode(node.id), parentEmailId, accumulatedDelay + delayHours);
+          }
+        case 'condition':
+          return emails[emails.length - 1] = {
+            ...emails[emails.length - 1],
+            condition: processConditionNode(node, emailId, accumulatedDelay)
+          }
+        default:
+          console.warn(`Unexpected node type: ${node.type}`);
+          return null;
+      }
+    };
+
+    // Start processing from the 'start' node
+    const startNode = nodes.find(n => n.type === 'start');
+    const firstNode = getNextNode(startNode.id);
+    if (firstNode) {
+      processNode(firstNode);
+    } else {
+      console.warn('No node connected to the start node');
+    }
+
+    console.log(emails)
+
+    const output = { emails };
+    console.log(JSON.stringify(output, null, 2));
+
+  }
 
   const handleNodesChange = useCallback(
     (changes) => {
